@@ -1,0 +1,685 @@
+' Created By: Danny Curtis 06.28.2018
+'
+' Notes:
+' 1: If macro does not work, open the VBE (Alt+F11) and Select References from the Tools Menu.
+'       Then select ” Microsoft Activex Data Objects Library” from the list.
+'
+' 2: Read access to the database must be granted through Secure.
+'
+' Last Edited By: Danny Curtis
+' Last Edited Date: 06.28.2018
+'
+' 06.28.2018 DRC: Macro created to eliminate the manual steps needed in pulling data from the database
+'
+'
+'----------------------------------------------------------------------------------------------------------------------------------------------------------------'
+Sub Amerigroup_Query()
+
+' Update Status bar message
+    Application.StatusBar = "Running Macro.... Please WAIT!"
+
+    Call Report_Setup
+    Call SF1_Claim_No_Query
+    Call SF2_Pat_Member_No_Query
+    Call SF2_SRC_SYS_MEMBER_NBR_Query
+    Call SF2_MBR_CURRENT_MCAID_NBR_Query
+    Call VlookupData
+    Call Copy_and_Save
+
+' Reset Status bar message to default
+    Application.StatusBar = normal
+
+End Sub
+
+Sub Report_Setup()
+'
+' Copy and format data for use in SQL queries
+'
+
+' Delete Macro Button
+    Sheets("MS Report").Select
+    
+    ActiveSheet.Shapes.Range(Array("MacroButton")).Delete
+
+' Update Status bar message
+    Application.StatusBar = "Formatting Data.... Please WAIT!"
+
+' Un-Merge B1 & C1 then convert SF1 Column I & SF2 Column J to Number. This is needed for the vlookups to work
+    Sheets("MS Report").Select
+    
+    Range("B1:C1").UnMerge
+    
+    Columns("I:J").Select
+    With Selection
+        .NumberFormat = "0"
+        .Value = .Value
+        .EntireColumn.AutoFit
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlBottom
+    End With
+    
+' Copy Columns I and J to "SF1and2" columns A and C. Use column A to determine the length of columns I and J
+    Dim Lastrow As Long
+    Sheets("MS Report").Select
+    
+    Lastrow = Range("A" & Rows.Count).End(xlUp).Row
+    
+    Range("I2:I" & Lastrow).Copy
+    Sheets("SF1and2").Range("A2").PasteSpecial xlPasteValues
+    
+    Range("J2:J" & Lastrow).Copy
+    Sheets("SF1and2").Range("C2").PasteSpecial xlPasteValues
+    
+' Concatenate Column C with "00" to work with data in the SQL tables
+    Sheets("SF1and2").Select
+    
+    Lastrow = Range("A" & Rows.Count).End(xlUp).Row
+    
+    Range("D2").FormulaR1C1 = "=CONCATENATE(RC[-1],""00"")"
+    Range("D2").Copy
+    Range("D2:D" & Lastrow).FillDown
+    Range("D2:D" & Lastrow).Copy
+    Range("D2:D" & Lastrow).PasteSpecial xlPasteValues
+    Application.CutCopyMode = False
+     
+' Format data pasted into columns A and E so that the values can be read. Apply filters for query steps.
+    Range("A:D").Select
+    With Selection
+        .NumberFormat = "0"
+        .Value = .Value
+        .EntireColumn.AutoFit
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlBottom
+    End With
+
+    Range("A1").Select
+    
+' Keep code below incase concatenate needs to be done outside of the query!
+
+' Confirm code is looking at the correct sheet, and format data to be entered into the query by adding single quotes and commas
+' Also removes the comma from the last cell based off of the length of columns A and E
+'    Sheets("SF1and2").Select
+'
+'    LastRow = Range("A" & Rows.Count).End(xlUp).Row
+'
+'    Range("B2").Select
+'    ActiveCell.FormulaR1C1 = "=CONCATENATE(""'"",RC[-1],""',"")"
+'    Range("B2").Copy
+'    Selection.AutoFill Destination:=Range("B2:B" & LastRow)
+'    Range("B2:B" & LastRow).Copy
+'    Selection.PasteSpecial Paste:=xlPasteValues, Operation:=xlNone, SkipBlanks _
+'        :=False, Transpose:=False
+'    Application.CutCopyMode = False
+'
+'    Range("B" & LastRow).Select
+'    ActiveCell.Replace What:=",", Replacement:="", LookAt:=xlPart, _
+'        SearchOrder:=xlByRows, MatchCase:=False, SearchFormat:=False, _
+'        ReplaceFormat:=False
+'    Range("A1").Select
+'
+'    Range("F2").Select
+'    ActiveCell.FormulaR1C1 = "=CONCATENATE(""'"",RC[-1],""',"")"
+'    Range("F2").Select
+'    Selection.AutoFill Destination:=Range("F2:F" & LastRow)
+'    Range("F2:F" & LastRow).Copy
+'    Selection.PasteSpecial Paste:=xlPasteValues, Operation:=xlNone, SkipBlanks _
+'        :=False, Transpose:=False
+'    Application.CutCopyMode = False
+'
+'    Range("F" & LastRow).Select
+'    ActiveCell.Replace What:=",", Replacement:="", LookAt:=xlPart, _
+'        SearchOrder:=xlByRows, MatchCase:=False, SearchFormat:=False, _
+'        ReplaceFormat:=False
+'    Range("A1").Select
+
+'' Copy / paste data from SF1and2 Column A into Column A of SF1 CLAIM_NO
+'    Sheets("SF1and2").Select
+'
+'    LastRow = Range("A" & Rows.Count).End(xlUp).Row
+'
+'    Range("A2:A" & LastRow).Copy
+'    Sheets("SF1 CLAIM_NO").Activate
+'    ActiveSheet.Paste
+'    Range("A1").Select
+'
+'' Copy / paste data from SF1and2 Column E into Column A of SF2 PAT_MEMBER, SF2 MBR_CURRENT, SF2 SYS_MEMBER
+'    Sheets("SF1and2").Select
+'
+'    LastRow = Range("E" & Rows.Count).End(xlUp).Row
+'
+'    Range("E2:E" & LastRow).Copy
+'    Sheets(Array("SF2 PAT_MEMBER", "SF2 MBR_CURRENT", "SF2 SYS_MEMBER")).Select
+'    Sheets("SF2 SYS_MEMBER").Activate
+'    ActiveSheet.Paste
+'    Range("A1").Select
+'    Sheets("SF1and2").Select
+'    Application.CutCopyMode = False
+
+
+
+End Sub
+
+
+Sub SF1_Claim_No_Query()
+'
+' Run query to get data based off of Special Field 1
+'
+
+' Update Status bar message
+    Application.StatusBar = "Running Claim Query.... Please WAIT!"
+
+' Declare and Set SQL Query variables
+    Dim objMyConn As ADODB.Connection
+    Dim objMyCmd As ADODB.Command
+    Dim objMyRecordset As ADODB.Recordset
+    Dim strVal As String
+    Dim strSQL As String
+    
+    Set objMyConn = New ADODB.Connection
+    Set objMyCmd = New ADODB.Command
+    Set objMyRecordset = New ADODB.Recordset
+
+' Define the number of rows that contain a claim in Column A in sheet SF1and2
+    Dim Lastrow As Long
+    
+    Sheets("SF1and2").Select
+    Lastrow = Range("A" & Rows.Count).End(xlUp).Row
+
+' Sort Column A Ascending
+    Columns("A:D").Sort key1:=Range("A2"), order1:=xlAscending, Header:=xlYes
+
+' Create and assign the delimited list of values you want in the IN() statement of the SQL Query from sheet SF1and2 starting in Cell A2
+' using the variable range defined above
+
+    strVal = "'" & Join(Application.Transpose(Sheets("SF1and2").Range("A2:A" & Lastrow).Value), "','") & "'"
+
+' Your current SQL statement as a string with the variable value used in the IN() statement.
+' Use " " to close each segment except the strVal assigned above
+
+    strSQL = "SELECT DISTINCT claim_no, clm_market_cd, clm_product_cd, CLM_PLAN_CD FROM dbo.FD_AMERIGROUP_URIX_V2_CLM(NOLOCK) WHERE claim_no in (" & strVal & ")"
+
+' Open Connection to database. This path will stay the same for this report. SSPI security is set to use your MS ID in the same way as SQL Server
+    objMyConn.ConnectionString = "Provider=SQLOLEDB;" & _
+                                 "Data Source=dbswp0628.aimhealth.com;" & _
+                                 "Initial Catalog=DMFeed00118;" & _
+                                 "Integrated Security=SSPI;"
+    objMyConn.Open
+
+' Set and Excecute SQL Command using all assigned variables. Timeout can be adjusted as needed.
+    Set objMyCmd.ActiveConnection = objMyConn
+    objMyCmd.CommandText = strSQL
+    objMyCmd.CommandType = adCmdText
+    objMyCmd.CommandTimeout = 0
+
+' Open Recordset using all assigned variables
+    Set objMyRecordset.Source = objMyCmd
+    objMyRecordset.Open
+
+' Copy Recordset Data back into Excel
+    Sheets("SF1 CLAIM_NO").Range("A2").CopyFromRecordset objMyRecordset
+    
+' Clean up Database connections
+    If CBool(objMyConn.State And adStateOpen) Then objMyConn.Close
+        Set objMyConn = Nothing
+        Set objMyCmd = Nothing
+        Set objMyRecordset = Nothing
+
+' Format data pasted into columns A so that the values can be read
+    Sheets("SF1 CLAIM_NO").Select
+    Range("A:D").Select
+    With Selection
+        .NumberFormat = "0"
+        .Value = .Value
+        .EntireColumn.AutoFit
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlBottom
+    End With
+    
+    Range("A1").Select
+
+' Reset Status bar message to default
+    Application.StatusBar = normal
+
+End Sub
+
+Sub SF2_Pat_Member_No_Query()
+'
+' Run query to get data based off of Special Field 2
+'
+
+' Update Status bar message
+    Application.StatusBar = "Running Pat_Member_No Query.... Please WAIT!"
+
+' Declare and Set SQL Query variables
+    Dim objMyConn As ADODB.Connection
+    Dim objMyCmd As ADODB.Command
+    Dim objMyRecordset As ADODB.Recordset
+    Dim strVal As String
+    Dim strSQL As String
+    
+    Set objMyConn = New ADODB.Connection
+    Set objMyCmd = New ADODB.Command
+    Set objMyRecordset = New ADODB.Recordset
+
+' Define the number of rows that contain a claim in Column A in sheet SF1and2
+' Needs extra zeros added to SF2 for the query
+    Dim Lastrow As Long
+    
+    Sheets("SF1and2").Select
+    Lastrow = Range("D" & Rows.Count).End(xlUp).Row
+
+' Sort Column D Ascending
+    Columns("A:D").Sort key1:=Range("D2"), order1:=xlAscending, Header:=xlYes
+
+' Create and assign the delimited list of values you want in the IN() statement of the SQL Query from sheet SF1and2 starting in Cell A2
+' using the variable range defined above
+
+    strVal = "'" & Join(Application.Transpose(Sheets("SF1and2").Range("D2:D" & Lastrow).Value), "','") & "'"
+
+' Your current SQL statement as a string with the variable value used in the IN() statement.
+' Use " " to close each segment except the strVal assigned above
+
+    strSQL = "SELECT DISTINCT PAT_MEMBER_NO, SRC_SYS_MEMBER_NBR, MBR_CURRENT_MCAID_NBR, MBR_MARKET_CD, MBR_PRODUCT_CD, CLM_PLAN_CD FROM dbo.FD_AMERIGROUP_URIX_V2_MEM(nolock) WHERE PAT_MEMBER_NO in (" & strVal & ")"
+
+' Open Connection to database. This path will stay the same for this report. SSPI security is set to use your MS ID in the same way as SQL Server
+    objMyConn.ConnectionString = "Provider=SQLOLEDB;" & _
+                                 "Data Source=dbswp0628.aimhealth.com;" & _
+                                 "Initial Catalog=DMFeed00118;" & _
+                                 "Integrated Security=SSPI;"
+    objMyConn.Open
+
+' Set and Excecute SQL Command using all assigned variables. Timeout can be adjusted as needed.
+    Set objMyCmd.ActiveConnection = objMyConn
+    objMyCmd.CommandText = strSQL
+    objMyCmd.CommandType = adCmdText
+    objMyCmd.CommandTimeout = 0
+
+' Open Recordset using all assigned variables
+    Set objMyRecordset.Source = objMyCmd
+    objMyRecordset.Open
+
+' Copy Recordset Data back into Excel
+    Sheets("SF2 PAT_MEMBER").Range("A2").CopyFromRecordset objMyRecordset
+    
+' Clean up Database connections
+    If CBool(objMyConn.State And adStateOpen) Then objMyConn.Close
+        Set objMyConn = Nothing
+        Set objMyCmd = Nothing
+        Set objMyRecordset = Nothing
+
+'Remove extra zeroes added to run query
+    Sheets("SF2 PAT_MEMBER").Select
+    Lastrow = Range("A" & Rows.Count).End(xlUp).Row
+
+    Dim ExtraZero As Range
+    For Each ExtraZero In Range("A2:A" & Lastrow)
+        If Right(ExtraZero.Value, 2) = "00" Then
+            ExtraZero.Value = Left(ExtraZero.Value, Len(ExtraZero) - 2)
+        End If
+    Next ExtraZero
+
+' Format data pasted into columns A so that the values can be read
+    Sheets("SF2 PAT_MEMBER").Select
+    Range("A:F").Select
+    With Selection
+        .NumberFormat = "0"
+        .Value = .Value
+        .EntireColumn.AutoFit
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlBottom
+    End With
+    
+    Range("A1").Select
+
+' Reset Status bar message to default
+    Application.StatusBar = normal
+
+End Sub
+
+Sub SF2_SRC_SYS_MEMBER_NBR_Query()
+'
+' Run query to get data based off of Special Field 2
+'
+
+' Update Status bar message
+    Application.StatusBar = "Running SRC_SYS_MEMBER_NBR Query.... Please WAIT!"
+
+' Declare and Set SQL Query variables
+    Dim objMyConn As ADODB.Connection
+    Dim objMyCmd As ADODB.Command
+    Dim objMyRecordset As ADODB.Recordset
+    Dim strVal As String
+    Dim strSQL As String
+    
+    Set objMyConn = New ADODB.Connection
+    Set objMyCmd = New ADODB.Command
+    Set objMyRecordset = New ADODB.Recordset
+
+' Define the number of rows that contain a claim in Column D in sheet SF1and2
+' Needs extra zeros added to SF2 for the query
+    Dim Lastrow As Long
+    
+    Sheets("SF1and2").Select
+    Lastrow = Range("D" & Rows.Count).End(xlUp).Row
+
+' Sort Column D Ascending
+    Columns("A:D").Sort key1:=Range("D2"), order1:=xlAscending, Header:=xlYes
+
+' Create and assign the delimited list of values you want in the IN() statement of the SQL Query from sheet SF1and2 starting in Cell A2
+' using the variable range defined above
+
+    strVal = "'" & Join(Application.Transpose(Sheets("SF1and2").Range("D2:D" & Lastrow).Value), "','") & "'"
+
+' Your current SQL statement as a string with the variable value used in the IN() statement.
+' Use " " to close each segment except the strVal assigned above
+
+    strSQL = "SELECT DISTINCT PAT_MEMBER_NO, SRC_SYS_MEMBER_NBR, MBR_CURRENT_MCAID_NBR, MBR_MARKET_CD, MBR_PRODUCT_CD, CLM_PLAN_CD FROM dbo.FD_AMERIGROUP_URIX_V2_MEM(nolock) WHERE SRC_SYS_MEMBER_NBR in (" & strVal & ")"
+
+' Open Connection to database. This path will stay the same for this report. SSPI security is set to use your MS ID in the same way as SQL Server
+    objMyConn.ConnectionString = "Provider=SQLOLEDB;" & _
+                                 "Data Source=dbswp0628.aimhealth.com;" & _
+                                 "Initial Catalog=DMFeed00118;" & _
+                                 "Integrated Security=SSPI;"
+    objMyConn.Open
+
+' Set and Excecute SQL Command using all assigned variables. Timeout can be adjusted as needed.
+    Set objMyCmd.ActiveConnection = objMyConn
+    objMyCmd.CommandText = strSQL
+    objMyCmd.CommandType = adCmdText
+    objMyCmd.CommandTimeout = 0
+
+' Open Recordset using all assigned variables
+    Set objMyRecordset.Source = objMyCmd
+    objMyRecordset.Open
+
+' Copy Recordset Data back into Excel
+    Sheets("SF2 SYS_MEMBER").Range("A2").CopyFromRecordset objMyRecordset
+    
+' Clean up Database connections
+    If CBool(objMyConn.State And adStateOpen) Then objMyConn.Close
+        Set objMyConn = Nothing
+        Set objMyCmd = Nothing
+        Set objMyRecordset = Nothing
+
+'Remove extra zeroes added to run query
+    Sheets("SF2 SYS_MEMBER").Select
+    Lastrow = Range("B" & Rows.Count).End(xlUp).Row
+
+    Dim ExtraZero As Range
+    For Each ExtraZero In Range("B2:B" & Lastrow)
+        If Right(ExtraZero.Value, 2) = "00" Then
+            ExtraZero.Value = Left(ExtraZero.Value, Len(ExtraZero) - 2)
+        End If
+    Next ExtraZero
+
+' Format data pasted into columns A so that the values can be read
+    Sheets("SF2 SYS_MEMBER").Select
+    Range("A:F").Select
+    With Selection
+        .NumberFormat = "0"
+        .Value = .Value
+        .EntireColumn.AutoFit
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlBottom
+    End With
+    
+    Range("A1").Select
+
+' Reset Status bar message to default
+    Application.StatusBar = normal
+
+End Sub
+
+Sub SF2_MBR_CURRENT_MCAID_NBR_Query()
+'
+' Run query to get data based off of Special Field 2
+'
+
+' Update Status bar message
+    Application.StatusBar = "Running MBR_CURRENT_MCAID_NBR Query.... Please WAIT!"
+
+' Declare and Set SQL Query variables
+    Dim objMyConn As ADODB.Connection
+    Dim objMyCmd As ADODB.Command
+    Dim objMyRecordset As ADODB.Recordset
+    Dim strVal As String
+    Dim strSQL As String
+    
+    Set objMyConn = New ADODB.Connection
+    Set objMyCmd = New ADODB.Command
+    Set objMyRecordset = New ADODB.Recordset
+
+' Define the number of rows that contain a claim in Column A in sheet SF1and2
+    Dim Lastrow As Long
+    
+    Sheets("SF1and2").Select
+    Lastrow = Range("C" & Rows.Count).End(xlUp).Row
+
+' Sort Column C Ascending
+    Columns("A:D").Sort key1:=Range("C2"), order1:=xlAscending, Header:=xlYes
+
+' Create and assign the delimited list of values you want in the IN() statement of the SQL Query from sheet SF1and2 starting in Cell A2
+' using the variable range defined above
+
+    strVal = "'" & Join(Application.Transpose(Sheets("SF1and2").Range("C2:C" & Lastrow).Value), "','") & "'"
+
+' Your current SQL statement as a string with the variable value used in the IN() statement.
+' Use " " to close each segment except the strVal assigned above
+
+    strSQL = "SELECT DISTINCT PAT_MEMBER_NO, SRC_SYS_MEMBER_NBR, MBR_CURRENT_MCAID_NBR, MBR_MARKET_CD, MBR_PRODUCT_CD, CLM_PLAN_CD FROM dbo.FD_AMERIGROUP_URIX_V2_MEM(nolock) WHERE MBR_CURRENT_MCAID_NBR in (" & strVal & ")"
+
+' Open Connection to database. This path will stay the same for this report. SSPI security is set to use your MS ID in the same way as SQL Server
+    objMyConn.ConnectionString = "Provider=SQLOLEDB;" & _
+                                 "Data Source=dbswp0628.aimhealth.com;" & _
+                                 "Initial Catalog=DMFeed00118;" & _
+                                 "Integrated Security=SSPI;"
+    objMyConn.Open
+
+' Set and Excecute SQL Command using all assigned variables. Timeout can be adjusted as needed.
+    Set objMyCmd.ActiveConnection = objMyConn
+    objMyCmd.CommandText = strSQL
+    objMyCmd.CommandType = adCmdText
+    objMyCmd.CommandTimeout = 0
+
+' Open Recordset using all assigned variables
+    Set objMyRecordset.Source = objMyCmd
+    objMyRecordset.Open
+
+' Copy Recordset Data back into Excel
+    Sheets("SF2 MBR_CURRENT").Range("A2").CopyFromRecordset objMyRecordset
+    
+' Clean up Database connections
+    If CBool(objMyConn.State And adStateOpen) Then objMyConn.Close
+        Set objMyConn = Nothing
+        Set objMyCmd = Nothing
+        Set objMyRecordset = Nothing
+
+' Format data pasted into columns A so that the values can be read
+    Sheets("SF2 MBR_CURRENT").Select
+    Range("A:F").Select
+    With Selection
+        .NumberFormat = "0"
+        .Value = .Value
+        .EntireColumn.AutoFit
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlBottom
+    End With
+    
+    Range("A1").Select
+
+' Reset Status bar message to default
+    Application.StatusBar = normal
+
+End Sub
+
+Sub VlookupData()
+'
+' Use vlookups to pull data from queries into report tab
+'
+
+' Determine last row of data on the Report Sheet
+    Dim Lastrow As Long
+    Sheets("MS Report").Select
+    
+    Lastrow = Range("A" & Rows.Count).End(xlUp).Row
+    
+' Reset Status bar message to default
+    Application.StatusBar = "Performing Vlookups.... Please WAIT!"
+    
+' Sort Column I to make vlookup more efficient
+    Columns("A:R").Sort key1:=Range("I2"), order1:=xlAscending, Header:=xlYes
+    
+' Vlookup Column I to pull Market Code. If no result, vlookup Column J against the three SF2 tabs. Paste results in Column K Special field 07 as well.
+    Range("P2").FormulaR1C1 = _
+        "=IFERROR(VLOOKUP(C9,'SF1 CLAIM_NO'!C1:C4,2,0),IFERROR(VLOOKUP(C10,'SF2 PAT_MEMBER'!C1:C6,4,0),IFERROR(VLOOKUP(C10,'SF2 SYS_MEMBER'!C2:C6,3,0),IFERROR(VLOOKUP(C10,'SF2 MBR_CURRENT'!C3:C6,2,0),""""))))"
+    Range("P2").Copy
+    Range("P2:P" & Lastrow).FillDown
+    Range("P2:P" & Lastrow).Copy
+    Range("P2:P" & Lastrow).PasteSpecial xlPasteValues
+    Range("K2:K" & Lastrow).PasteSpecial xlPasteValues
+    Application.CutCopyMode = False
+
+' Sort Column J to make vlookup more efficient
+    Columns("A:R").Sort key1:=Range("J2"), order1:=xlAscending, Header:=xlYes
+    
+' Vlookup Column J to pull Product Code. If no result, vlookup Column J against the three SF2 tabs. Paste results in Column L Special field 08 as well.
+    Range("Q2").FormulaR1C1 = _
+        "=IFERROR(VLOOKUP(C9,'SF1 CLAIM_NO'!C1:C4,3,0),IFERROR(VLOOKUP(C10,'SF2 PAT_MEMBER'!C1:C6,5,0),IFERROR(VLOOKUP(C10,'SF2 SYS_MEMBER'!C2:C6,4,0),IFERROR(VLOOKUP(C10,'SF2 MBR_CURRENT'!C3:C6,3,0),""""))))"
+    Range("Q2").Copy
+    Range("Q2:Q" & Lastrow).FillDown
+    Range("Q2:Q" & Lastrow).Copy
+    Range("Q2:Q" & Lastrow).PasteSpecial xlPasteValues
+    Range("L2:L" & Lastrow).PasteSpecial xlPasteValues
+    Application.CutCopyMode = False
+    
+' Vlookup Column J to pull Plan Code. If no result, vlookup Column J against the three SF2 tabs.
+    Range("R2").Select
+    Range("R2").FormulaR1C1 = _
+        "=IFERROR(VLOOKUP(C9,'SF1 CLAIM_NO'!C1:C4,4,0),IFERROR(VLOOKUP(C10,'SF2 PAT_MEMBER'!C1:C6,6,0),IFERROR(VLOOKUP(C10,'SF2 SYS_MEMBER'!C2:C6,5,0),IFERROR(VLOOKUP(C10,'SF2 MBR_CURRENT'!C3:C6,4,0),""""))))"
+    Range("R2").Copy
+    Range("R2:R" & Lastrow).FillDown
+    Range("R2:R" & Lastrow).Copy
+    Range("R2:R" & Lastrow).PasteSpecial xlPasteValues
+    Application.CutCopyMode = False
+    
+' Remove Vlookup results of Zero (#N/As)and apply borders to the cells
+    Range("P2:R" & Lastrow).Replace What:="0", Replacement:="", LookAt:=xlWhole
+
+    Range("P2:R" & Lastrow).Borders.LineStyle = xlContinuous
+    
+' Reset Status bar message to default
+    Application.StatusBar = normal
+
+
+End Sub
+
+Sub Delete_Data()
+'
+' Delete all data from below headers on the sheets in array below
+' Used during testing but not called during macro
+
+' Determine lastrowbased on MS Report sheet and delete the same amount of rows on the sheets in the array
+    Dim Lastrow As Long
+    
+    ws1 = Worksheet
+    ws2 = Array("SF1and2", "SF1 CLAIM_NO", "SF2 PAT_MEMBER", "SF2 SYS_MEMBER", _
+        "SF2 MBR_CURRENT")
+        
+    For Each ws1 In ws2
+        Lastrow = Sheets("MS Report").Range("A" & Rows.Count).End(xlUp).Row + 1
+        Rows("2:" & Lastrow).Clear
+        Rows("2:" & Lastrow).Delete
+    Next ws1
+    
+    Sheets("MS Report").Select
+    
+End Sub
+
+Sub Copy_and_Save()
+'
+' Save a copy of the report to the users desktop and close the macro without saving changes
+'
+
+' Delete sheets needed for Queries
+    Application.DisplayAlerts = False
+    ShtsToDel = Array("SF1and2", "SF1 CLAIM_NO", "SF2 PAT_MEMBER", "SF2 SYS_MEMBER", _
+        "SF2 MBR_CURRENT")
+    
+    For Each shtname In ShtsToDel
+        Worksheets(shtname).Delete
+    Next shtname
+
+    Application.DisplayAlerts = True
+
+' Reset Status bar message to default
+    Application.StatusBar = normal
+
+' Save As new workbook to users desktop.
+    LoginName = Environ("UserName")
+
+    Application.DisplayAlerts = False
+    
+    ThisWorkbook.SaveAs Filename:="C:\Users\" & LoginName & "\Desktop\" & "Amerigoup Query Results" & Format(Date, "yyyymmdd"), _
+        FileFormat:=51, Password:="", WriteResPassword:="", ReadOnlyRecommended:=False, CreateBackup:=False
+    
+' Close macro after selecting OK from message box.
+    MsgBox "Macro is finished! Click OK to close and save the report on your desktop.", vbOKOnly + vbInformation
+    ActiveWorkbook.Close
+        
+    Application.DisplayAlerts = True
+
+End Sub
+
+Sub Test()
+
+' TEST AREA
+    
+' END TEST AREA
+
+End Sub
+
+
+Sub STANDARD_QUERY_TEMPLATE_DO_NOT_EDIT()
+
+'
+' Copy and update as needed. DO NOT CHANGE THIS ONE!
+'
+
+' Declare variables
+        Dim objMyConn As ADODB.Connection
+        Dim objMyCmd As ADODB.Command
+        Dim objMyRecordset As ADODB.Recordset
+
+        Set objMyConn = New ADODB.Connection
+        Set objMyCmd = New ADODB.Command
+        Set objMyRecordset = New ADODB.Recordset
+
+' Open Connection
+     ' Data Source = DATABASE_NAME
+     ' Initial Catalog = TABLE_NAME
+     ' Keep other options the same for AIM databases. Use Data tab > Connections for more information regarding your connection
+        objMyConn.ConnectionString = "Provider=SQLOLEDB;Data Source=dbswp0628.aimhealth.com;" & _
+                  "Initial Catalog=DMFeed00118;" & _
+                  "Integrated Security=SSPI;"
+        objMyConn.Open
+
+' Set and Excecute SQL Command
+        Set objMyCmd.ActiveConnection = objMyConn
+        objMyCmd.CommandText = "YOUR_QUERY_GOES_HERE"
+        objMyCmd.CommandType = adCmdText
+
+' Open Recordset
+        Set objMyRecordset.Source = objMyCmd
+        objMyRecordset.Open
+
+' Copy Data to Excel
+        Sheets("YOUR_SHEET_NAME_HERE").Range("STARTING_CELL_FOR_DATA_TO_BE_PASTED_INTO").CopyFromRecordset objMyRecordset
+        
+' Clear Connections
+    If CBool(objMyConn.State And adStateOpen) Then objMyConn.Close
+        Set objMyConn = Nothing
+        Set objMyCmd = Nothing
+        Set objMyRecordset = Nothing
+
+End Sub
+
